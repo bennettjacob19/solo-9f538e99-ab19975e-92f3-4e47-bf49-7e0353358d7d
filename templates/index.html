@@ -39,17 +39,23 @@
   <!-- 左列 -->
   <section class="col">
     <div class="card">
-      <h2>① 试发网关请求</h2>
+      <h2>① 试发网关请求 <span class="hint">可直接输入任意路径试发，查看原始状态码与 X-Config-Version</span></h2>
       <div class="row">
         <select id="gw-route" style="flex:1"></select>
         <button id="gw-send" class="primary">发送 GET</button>
       </div>
-      <div id="gw-result" class="gw-result muted">尚未发送。停用路由会得到 <b>503</b>，其余路由由 mock 上游正常应答。</div>
+      <div class="row" style="margin-top:8px">
+        <input id="gw-custom" class="reqid" style="flex:1"
+               placeholder="也可直接输入路径，如 /api/gen/000123 或 /any/path">
+        <button id="gw-custom-send">按输入路径发送</button>
+      </div>
+      <div id="gw-result" class="gw-result muted">尚未发送。停用路由会得到 <b>503</b>，其余路由由 mock 上游正常应答；状态码与版本头取自同一版快照。</div>
     </div>
 
     <div class="card">
       <h2>② 当前已发布配置（网关实际生效）</h2>
       <div id="config-summary"></div>
+      <div id="catalog-summary" class="catalog-box"></div>
       <div id="route-table"></div>
     </div>
 

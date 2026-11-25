@@ -20,7 +20,7 @@ def seed_if_needed() -> None:
             "request_id": "seed",
             "published_sim": config.START_NOW,
             "disabled": [],
-            "routes": config.SEED_ROUTES,
+            "routes": config.seed_routes(),
         }
         # 播种直接写 current.json（它本身就是完整配置）
         tmp = config.CURRENT_PATH.with_suffix(".seed.tmp")
@@ -49,7 +49,7 @@ def load_current() -> tuple[dict[str, Any], bool]:
             "version": 0,
             "request_id": "builtin-fallback",
             "disabled": [],
-            "routes": config.SEED_ROUTES,
+            "routes": config.seed_routes(),
         }
         _LAST_GOOD = cfg
         return cfg, True

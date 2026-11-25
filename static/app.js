@@ -177,21 +177,49 @@ function renderGatewayOptions() {
   const sel = $("gw-route");
   const cur = sel.value;
   const routes = state?.config?.routes || [];
+  const total = state?.config_routes_total ?? routes.length;
   const opts = ['<option value="/">/ （网关索引）</option>']
     .concat(routes.map((r) => `<option value="${esc(r.path)}">${esc(r.path)} — ${esc(r.note || "")}</option>`));
+  if (total > routes.length) {
+    opts.push(`<option disabled>— 仅展示前 ${routes.length}/${total} 条，其余路径请在下方输入框直接试发 —</option>`);
+  }
   sel.innerHTML = opts.join("");
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
 }
 
+function renderCatalog() {
+  const cat = state?.catalog;
+  const box = $("catalog-summary");
+  if (!cat) { box.innerHTML = ""; return; }
+  const c = cat.current || {};
+  const zeroFallback = (cat.full_parse_fallbacks || 0) === 0;
+  box.innerHTML = `
+    <div class="cat-line">
+      <span class="badge info">路由目录 O(1) 判定</span>
+      <span class="muted">来源 <b>${esc(c.source || "–")}</b></span>
+      <span class="muted">路由 ${c.route_count ?? "–"} 条 · 停用 ${c.disabled_count ?? "–"} 条</span>
+      <span class="mono muted">fp ${esc((c.route_fingerprint || "–").slice(0, 10))}</span>
+    </div>
+    <div class="cat-line mono">
+      请求 ${cat.requests} · 热路径命中 ${cat.hot_path_hits} · 检测到切换 ${cat.sig_changes_detected}
+      · 侧车装载 ${cat.sidecar_adoptions} · 全量解析降级 <b style="color:${zeroFallback ? "var(--green)" : "var(--amber)"}">${cat.full_parse_fallbacks}</b>
+      · 目录新建 ${cat.route_index_builds} · 目录复用 ${cat.route_index_reuses}
+    </div>`;
+}
+
 function renderConfig() {
+  renderCatalog();
   const c = state.config || {};
+  const total = state?.config_routes_total ?? (c.routes || []).length;
+  const truncated = state?.config_routes_truncated;
   const disabled = new Set(c.disabled || []);
   $("config-summary").innerHTML = `
     <div class="lease-big">
       <span class="badge info">version ${esc(c.version)}</span>
       <span class="muted">request_id <span class="mono">${esc(c.request_id)}</span></span>
       ${state.config_from_cache ? '<span class="badge warn">读取失败，使用内存 last-good 缓存</span>' : ""}
-      <span>停用：${disabled.size ? [...disabled].map((d) => `<span class="badge bad">${esc(d)}</span>`).join(" ") : '<span class="badge ok">无</span>'}</span>
+      <span>停用：${disabled.size ? [...disabled].slice(0, 12).map((d) => `<span class="badge bad">${esc(d)}</span>`).join(" ")
+        + (disabled.size > 12 ? ` <span class="muted">等 ${disabled.size} 条</span>` : "") : '<span class="badge ok">无</span>'}</span>
     </div>`;
   const rows = (c.routes || []).map((r) => {
     const off = disabled.has(r.path);
@@ -201,7 +229,9 @@ function renderConfig() {
       <td>${off ? '<span class="badge bad">停用 → 503</span>' : '<span class="badge ok">正常 → 200</span>'}</td>
     </tr>`;
   }).join("");
-  $("route-table").innerHTML = `<table class="data"><thead><tr><th>路由</th><th>说明</th><th>网关行为</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const note = truncated
+    ? `<div class="reject show" style="margin-bottom:6px">路由表共 ${total} 条，页面只展示前 ${c.routes.length} 条；网关与目录索引始终持有全量，可在卡片①输入完整路径试发。</div>` : "";
+  $("route-table").innerHTML = note + `<table class="data"><thead><tr><th>路由（共 ${total} 条）</th><th>说明</th><th>网关行为</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function fmtBytes(n) {
@@ -412,11 +442,18 @@ async function runAction(act, runId, btn) {
   refresh();
 }
 
-async function sendGateway() {
-  const path = $("gw-route").value;
+function normalizeGwPath(p) {
+  p = (p || "").trim();
+  if (!p) return "/";
+  if (!p.startsWith("/")) p = "/" + p;
+  return p;
+}
+
+async function sendGateway(path) {
+  path = normalizeGwPath(path);
   const url = "/gw" + (path === "/" ? "/" : path);
   const box = $("gw-result");
-  box.textContent = "请求中…";
+  box.textContent = `请求中… ${url}`;
   try {
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     const text = await res.text();
@@ -426,8 +463,10 @@ async function sendGateway() {
     box.innerHTML =
       `<div><span class="gw-status ${cls}">HTTP ${res.status}</span>` +
       `<span class="muted">X-Config-Version: ${esc(res.headers.get("X-Config-Version"))}</span>` +
+      (res.headers.get("X-Config-Index") ? ` <span class="badge info">index: ${esc(res.headers.get("X-Config-Index"))}</span>` : "") +
       (res.headers.get("X-Config-Source") ? ` <span class="badge warn">${esc(res.headers.get("X-Config-Source"))}</span>` : "") +
-      `</div><pre style="margin:8px 0 0;white-space:pre-wrap">${esc(pretty)}</pre>`;
+      `</div><div class="muted" style="margin-top:4px">GET ${esc(url)}</div>` +
+      `<pre style="margin:8px 0 0;white-space:pre-wrap">${esc(pretty)}</pre>`;
   } catch (e) {
     box.textContent = "请求失败：" + e;
   }
@@ -500,8 +539,14 @@ $("recover-btn").addEventListener("click", async () => {
   } else notice("err", r.data?.error || "恢复失败");
   refresh();
 });
-$("gw-send").addEventListener("click", sendGateway);
-$("gw-route").addEventListener("change", () => {});
+$("gw-send").addEventListener("click", () => sendGateway($("gw-route").value));
+$("gw-custom-send").addEventListener("click", () => sendGateway($("gw-custom").value));
+$("gw-custom").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") sendGateway($("gw-custom").value);
+});
+$("gw-route").addEventListener("change", () => {
+  $("gw-custom").value = $("gw-route").value === "/" ? "" : $("gw-route").value;
+});
 
 refresh();
 setInterval(refresh, 1000);

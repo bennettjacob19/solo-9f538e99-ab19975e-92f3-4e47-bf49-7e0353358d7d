@@ -20,7 +20,7 @@ from typing import Any
 
 from flask import Flask, jsonify, render_template, request, Response
 
-from drill import config, configstore, db, disk, lease, runner
+from drill import catalog, config, configstore, db, disk, lease, runner
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -33,6 +33,8 @@ def bootstrap() -> None:
     config.ensure_dirs()
     db.init_db()
     configstore.seed_if_needed()
+    # 建立首代路由目录快照（含侧车装载 / 全量解析兜底）并启动后台巡检线程
+    catalog.bootstrap()
     # 启动即做一次恢复：认回租约 / token，处理上次未完成的切换与失联任务
     try:
         runner.recover_publisher()
@@ -42,6 +44,7 @@ def bootstrap() -> None:
 
 bootstrap()
 atexit.register(runner.shutdown_all)
+atexit.register(catalog.shutdown)
 
 
 def _sigterm_handler(signum, frame):  # noqa: ANN001
@@ -107,7 +110,15 @@ def get_state():
         fault = db.kv_get(con, "fault_next_write", "") or ""
         next_token = int(db.kv_get(con, "next_token", "1"))
 
-    cfg, from_cache = configstore.load_current()
+    cfg, from_cache = catalog.current_config_dict()
+    # 万条路由时每秒轮询的 /api/state 不把整表塞给前端：截断展示，全量在网关侧
+    route_total = len(cfg.get("routes", []))
+    cfg_view = dict(cfg)
+    STATE_ROUTE_LIMIT = 200
+    truncated = False
+    if route_total > STATE_ROUTE_LIMIT:
+        cfg_view["routes"] = cfg["routes"][:STATE_ROUTE_LIMIT]
+        truncated = True
     try:
         disk_snap = disk.snapshot()
     except Exception as exc:  # noqa: BLE001
@@ -124,8 +135,11 @@ def get_state():
         next_token=next_token,
         lease=lease_pub,
         worker_tokens=workers,
-        config=cfg,
+        config=cfg_view,
         config_from_cache=from_cache,
+        config_routes_total=route_total,
+        config_routes_truncated=truncated,
+        catalog=catalog.stats(),
         disk=disk_snap,
         runs=runs,
         receipts=receipts,
@@ -377,27 +391,29 @@ def api_reset():
 
 
 # ---------------------------------------------------------------------------
-# 网关：/gw/... 只读本地卷 current.json
+# 网关：/gw/... 只读本地卷 current.json（经路由目录做 O(1) 判定）
 # ---------------------------------------------------------------------------
 
 @app.route("/gw", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 @app.route("/gw/", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 @app.route("/gw/<path:subpath>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 def gateway(subpath: str = ""):
-    cfg, from_cache = configstore.load_current()
-    version = cfg.get("version")
-    disabled = set(cfg.get("disabled", []))
-    known = {r["path"] for r in cfg.get("routes", [])}
-
     route_path = "/" + subpath if subpath else "/"
     if route_path != "/" and route_path.endswith("/"):
         route_path = route_path.rstrip("/")
 
-    headers = {"X-Config-Version": str(version), "Cache-Control": "no-store"}
-    if from_cache:
-        headers["X-Config-Source"] = "last-good-cache"
+    # 唯一判定点：一次 stat 指纹检查 + 两次 O(1) 集合查询。
+    # 不重读整份配置、不遍历路由表 / 停用清单、不等待索引重建；
+    # 返回的 snapshot 同时是状态码与 X-Config-Version 的唯一数据源。
+    snap, decision = catalog.decide(route_path)
+    version = snap.version
 
-    if route_path in disabled:
+    headers = {"X-Config-Version": str(version), "Cache-Control": "no-store"}
+    if snap.from_cache:
+        headers["X-Config-Source"] = "last-good-cache"
+    headers["X-Config-Index"] = snap.source
+
+    if decision == "disabled":
         body = {
             "ok": False,
             "error": "route_disabled",
@@ -411,7 +427,7 @@ def gateway(subpath: str = ""):
         resp.headers["Retry-After"] = str(config.LEASE_TTL)
         return resp
 
-    if route_path != "/" and known and route_path not in known:
+    if decision == "not_found":
         resp = jsonify({
             "ok": False, "error": "route_not_found",
             "message": f"网关配置中没有路由 {route_path}",
@@ -434,8 +450,8 @@ def gateway(subpath: str = ""):
     }
     if route_path == "/":
         payload["gateway"] = "GSB drill gateway"
-        payload["routes"] = cfg.get("routes", [])
-        payload["disabled"] = sorted(disabled)
+        payload["routes"] = [dict(r) for r in snap.route_index.routes]
+        payload["disabled"] = sorted(snap.disabled)
     resp = jsonify(payload)
     resp.status_code = 200
     resp.headers.update(headers)

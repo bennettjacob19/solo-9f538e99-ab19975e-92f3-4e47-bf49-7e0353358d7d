@@ -38,6 +38,30 @@ SEED_ROUTES = [
     {"path": "/admin/reload", "upstream": "mock://admin/reload", "note": "配置重载"},
 ]
 
+# 大路由表演练 / 自测：设 DRILL_ROUTE_COUNT=N 时播种 N 条路由（含上面的内置路由）。
+# 默认 0 表示仅使用 SEED_ROUTES；该值只影响播种，发布时整表原样沿用。
+ROUTE_COUNT = int(os.environ.get("DRILL_ROUTE_COUNT", "0"))
+
+
+def seed_routes() -> list[dict]:
+    """返回播种路由集合；ROUTE_COUNT 大于内置条数时补足生成路由。"""
+    routes = [dict(r) for r in SEED_ROUTES]
+    if ROUTE_COUNT <= len(routes):
+        return routes
+    existing = {r["path"] for r in routes}
+    seq = 0
+    while len(routes) < ROUTE_COUNT:
+        path = f"/api/gen/{seq:06d}"
+        seq += 1
+        if path in existing:
+            continue
+        routes.append({
+            "path": path,
+            "upstream": f"mock://backend/gen/{seq:06d}",
+            "note": f"大表生成路由 {seq}",
+        })
+    return routes
+
 
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -30,7 +30,7 @@ from typing import Any
 # 允许 `python /path/to/drill/publisher.py` 与 `python -m drill.publisher`
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from drill import config, configstore, db, lease  # noqa: E402
+from drill import catalog, config, configstore, db, lease  # noqa: E402
 
 
 class FenceDenied(Exception):
@@ -156,7 +156,7 @@ class Publisher:
             "token": self.token,
             "published_sim": db.sim_now(self.con),
             "disabled": disabled,
-            "routes": current.get("routes", config.SEED_ROUTES),
+            "routes": current.get("routes", config.seed_routes()),
         }
         payload = json.dumps(new_cfg, ensure_ascii=False, indent=2).encode("utf-8")
         self.bytes_total = len(payload)
@@ -244,7 +244,11 @@ class Publisher:
                 f.flush()
                 os.fsync(f.fileno())
 
-        # 7) 原子切换 —— 对网关来说配置在此刻生效
+        # 7) 原子切换 —— 对网关来说配置在此刻生效。
+        #    切换前先预制路由目录侧车 + 代际指针（写在 state 目录，不碰配置卷），
+        #    保证新 current.json 出现的同一时刻，网关首个请求即可 O(1) 装载，
+        #    既不遍历万条路由表 / 停用清单，也不等任何全表索引重建。
+        catalog.publisher_publish(final_cfg, payload_size=len(final_bytes))
         os.replace(config.STAGING_PATH, config.CURRENT_PATH)
         configstore._fsync_dir(config.DATA_DIR)
         self.con.execute(
@@ -346,6 +350,12 @@ def recover() -> dict[str, Any]:
             configstore.write_current_bytes(
                 json.dumps(cfg, ensure_ascii=False, indent=2).encode("utf-8")
             )
+            # 同步装载内存快照并补齐代际指针：恢复后的首个请求就按实际生效
+            # 配置响应（即使该版号在重置后被复用），且同样走 O(1) 热路径。
+            try:
+                catalog.install_from_cfg(cfg, source="recover")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[recover] catalog install failed: {exc}", flush=True)
             con.execute("UPDATE versions SET applied=1 WHERE version=?", (v["version"],))
             report["pending_switches"].append(
                 {"version": v["version"], "request_id": v["request_id"]}

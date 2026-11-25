@@ -217,6 +217,10 @@ def reset_all() -> None:
                 pass
     db.init_db()
     configstore_seed()
+    # 路由目录也随演练重置：清掉侧车与内存快照后按新播种的 v0 重建
+    from . import catalog
+    catalog.reset()
+    catalog.bootstrap()
 
 
 def configstore_seed() -> None:

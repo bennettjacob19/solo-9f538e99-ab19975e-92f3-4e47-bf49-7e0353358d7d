@@ -168,3 +168,18 @@ table.data tr:last-child td { border-bottom: none; }
 .empty { color: var(--muted); font-size: 12px; font-style: italic; padding: 6px 0; }
 .reason-detail { color: #fca5a5; font-size: 11.5px; margin-top: 3px; }
 .proc-state { font-family: var(--mono); color: var(--cyan); }
+
+/* 路由目录 O(1) 指标卡 */
+.catalog-box {
+  margin: 8px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.catalog-box .cat-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.catalog-box .mono { font-size: 11px; color: var(--muted); }
+#gw-custom { font-family: var(--mono); }

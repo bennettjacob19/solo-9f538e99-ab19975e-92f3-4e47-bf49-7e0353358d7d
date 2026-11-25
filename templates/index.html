@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GSB 网关维护演练台 · 租约 / Fencing / 接管 / 幂等回执</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🛡️</span>
+    <div>
+      <h1>GSB 网关维护演练台</h1>
+      <p class="sub">本地卷 JSON 配置 · SQLite 租约与回执 · fencing token · 暂停 / 接管 / 中断恢复</p>
+    </div>
+  </div>
+  <div class="clockbox">
+    <div class="clock-line">
+      <span class="label">模拟时钟</span>
+      <b id="sim-now">t=–</b>
+      <span class="label">TTL <span id="ttl">–</span>s</span>
+    </div>
+    <div class="clock-actions">
+      <button data-clock="10">+10s</button>
+      <button data-clock="30">+30s</button>
+      <button data-clock="60">+60s</button>
+      <button id="clock-expire" class="warn">推进到租约过期</button>
+      <input id="clock-custom" type="number" min="1" placeholder="秒" style="width:64px">
+      <button id="clock-custom-btn">推进</button>
+      <button id="reset-btn" class="danger">重置演练</button>
+    </div>
+  </div>
+</header>
+
+<div id="notices" class="notices"></div>
+
+<main class="grid">
+  <!-- 左列 -->
+  <section class="col">
+    <div class="card">
+      <h2>① 试发网关请求</h2>
+      <div class="row">
+        <select id="gw-route" style="flex:1"></select>
+        <button id="gw-send" class="primary">发送 GET</button>
+      </div>
+      <div id="gw-result" class="gw-result muted">尚未发送。停用路由会得到 <b>503</b>，其余路由由 mock 上游正常应答。</div>
+    </div>
+
+    <div class="card">
+      <h2>② 当前已发布配置（网关实际生效）</h2>
+      <div id="config-summary"></div>
+      <div id="route-table"></div>
+    </div>
+
+    <div class="card">
+      <h2>⑤ 本地卷磁盘核算 <span class="hint">最多 current.json + staging.json；已删但仍打开的 inode 也计数</span></h2>
+      <div id="disk-panel"></div>
+    </div>
+  </section>
+
+  <!-- 中列 -->
+  <section class="col">
+    <div class="card lease-card">
+      <h2>③ 租约状态</h2>
+      <div id="lease-panel"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="race-ab" class="primary">⚡ A / B 同时申请租约（并发）</button>
+        <button id="recover-btn">🔄 重启发布端并恢复租约 / 令牌</button>
+      </div>
+      <div class="fault-row">
+        <span class="label">写入故障注入：</span>
+        <button data-fault="disk_full">下一次写入触发 ENOSPC</button>
+        <button data-fault="io_error">下一次写入触发 EIO</button>
+        <button data-fault="">清除</button>
+        <span id="fault-state" class="badge"></span>
+      </div>
+    </div>
+
+    <div class="workers">
+      <div class="card worker" data-holder="A">
+        <h2>Worker A <span class="who" id="who-A"></span></h2>
+        <div class="worker-lease" id="worker-lease-A"></div>
+        <div class="row">
+          <button class="primary" data-action="acquire" data-holder="A">申请租约</button>
+          <button data-action="renew" data-holder="A">续租</button>
+        </div>
+        <div class="reject" id="reject-A"></div>
+        <label class="field-label">提交停用清单（勾选即期望的完整停用集合）</label>
+        <div class="checks" id="checks-A"></div>
+        <button class="linkish" data-action="sync-checks" data-holder="A">↺ 同步当前已发布停用清单</button>
+        <div class="row" style="margin-top:8px">
+          <label class="field-label" style="margin:0">请求号</label>
+          <input id="reqid-A" class="reqid" value="req-A-001">
+          <button class="mini" data-action="new-reqid" data-holder="A">新号</button>
+        </div>
+        <div class="row">
+          <label class="field-label" style="margin:0">暂停点</label>
+          <select id="pause-A" class="pause-sel">
+            <option value="none">不暂停（直接发完）</option>
+            <option value="stage_half">暂存写一半（fd 保持打开）</option>
+            <option value="before_switch">切换已发起但未生效</option>
+            <option value="effective_no_response">已生效但未回包</option>
+          </select>
+        </div>
+        <button class="primary publish-btn" data-action="publish" data-holder="A">提交停用清单 / 发布</button>
+      </div>
+
+      <div class="card worker" data-holder="B">
+        <h2>Worker B <span class="who" id="who-B"></span></h2>
+        <div class="worker-lease" id="worker-lease-B"></div>
+        <div class="row">
+          <button class="primary" data-action="acquire" data-holder="B">申请租约</button>
+          <button data-action="renew" data-holder="B">续租</button>
+        </div>
+        <div class="reject" id="reject-B"></div>
+        <label class="field-label">提交停用清单（勾选即期望的完整停用集合）</label>
+        <div class="checks" id="checks-B"></div>
+        <button class="linkish" data-action="sync-checks" data-holder="B">↺ 同步当前已发布停用清单</button>
+        <div class="row" style="margin-top:8px">
+          <label class="field-label" style="margin:0">请求号</label>
+          <input id="reqid-B" class="reqid" value="req-B-001">
+          <button class="mini" data-action="new-reqid" data-holder="B">新号</button>
+        </div>
+        <div class="row">
+          <label class="field-label" style="margin:0">暂停点</label>
+          <select id="pause-B" class="pause-sel">
+            <option value="none">不暂停（直接发完）</option>
+            <option value="stage_half">暂存写一半（fd 保持打开）</option>
+            <option value="before_switch">切换已发起但未生效</option>
+            <option value="effective_no_response">已生效但未回包</option>
+          </select>
+        </div>
+        <button class="primary publish-btn" data-action="publish" data-holder="B">提交停用清单 / 发布</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>④ 发布任务（独立子进程）<span class="hint">暂停 → SIGCONT 恢复；强杀 → SIGKILL 模拟中断；同号重发回放回执</span></h2>
+      <div id="runs-panel"></div>
+    </div>
+  </section>
+
+  <!-- 右列 -->
+  <section class="col">
+    <div class="card guide">
+      <h2>🧪 推荐剧本</h2>
+      <ol>
+        <li><b>并发申请：</b>点「A/B 同时申请」，恰好一个成功，另一个显示 409 拒绝原因。</li>
+        <li><b>接管两版：</b>胜方 A 选暂停点「暂存写一半」并发布 → 时钟「推进到租约过期」→ B 申请（拿到 token+1）→ B 连续发布两版 → 回到 A 的任务点「恢复」：旧 token 被 fencing 拒绝，版号 / 配置停在 B 的第二版；磁盘面板可见 A 的「已删除但仍打开」幽灵文件在其进程结束后消失。</li>
+        <li><b>生效未回包 + 幂等：</b>A 发布时选「已生效但未回包」→ 任务暂停后点该行「同号重发」：立即返回原回执且不升版（原进程仍暂停）。再试「强杀」→「重启发布端并恢复」→ 再同号重发。</li>
+        <li><b>写入失败：</b>注入 ENOSPC 后发布，任务失败，网关仍按 current.json 旧完整版响应；再次正常发布即可恢复。</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>回执（SQLite · 幂等）</h2>
+      <div id="receipts-panel"></div>
+    </div>
+
+    <div class="card">
+      <h2>版本历史</h2>
+      <div id="versions-panel"></div>
+    </div>
+
+    <div class="card log-card">
+      <h2>事件 / 拒绝原因</h2>
+      <div id="events-panel" class="events"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  GSB drill · 配置卷 <code id="data-dir">–</code> · 权威状态在 SQLite，页面每秒轮询
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

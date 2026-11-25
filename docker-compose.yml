@@ -1,0 +1,21 @@
+services:
+  gateway:
+    build: .
+    image: gsb-drill-gateway:latest
+    container_name: gsb-drill
+    # init 负责回收发布端子进程，避免僵尸进程
+    init: true
+    ports:
+      - "8000:8000"
+    environment:
+      # 模拟租约 TTL（模拟秒）；页面上推进的是模拟时钟，不依赖真实等待
+      DRILL_LEASE_TTL: "30"
+      DRILL_DISK_QUOTA: "1048576"
+    volumes:
+      - drill-volume:/drill
+    # 演练台：不自动重启，方便观察 killed / interrupted 状态
+    restart: "no"
+
+volumes:
+  drill-volume:
+    name: gsb-drill-volume

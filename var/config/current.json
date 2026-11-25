@@ -1,0 +1,38 @@
+{
+  "version": 0,
+  "request_id": "seed",
+  "published_sim": 1000,
+  "disabled": [],
+  "routes": [
+    {
+      "path": "/health",
+      "upstream": "mock://backend/health",
+      "note": "健康检查"
+    },
+    {
+      "path": "/api/login",
+      "upstream": "mock://backend/login",
+      "note": "登录"
+    },
+    {
+      "path": "/api/catalog",
+      "upstream": "mock://backend/catalog",
+      "note": "商品目录"
+    },
+    {
+      "path": "/api/checkout",
+      "upstream": "mock://backend/checkout",
+      "note": "下单结算"
+    },
+    {
+      "path": "/api/inventory",
+      "upstream": "mock://backend/inventory",
+      "note": "库存"
+    },
+    {
+      "path": "/admin/reload",
+      "upstream": "mock://admin/reload",
+      "note": "配置重载"
+    }
+  ]
+}
